@@ -1,0 +1,12 @@
+CPU Usage: 0.0%
+Memory Usage: 82.8%
+Disk Usage: 2.5%
+---
+CPU Usage: 7.8%
+Memory Usage: 82.8%
+Disk Usage: 2.5%
+---
+CPU Usage: 4.2%
+Memory Usage: 81.3%
+Disk Usage: 2.5%
+---
