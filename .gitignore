@@ -1,6 +1,12 @@
+# Ignore Python virtual environment
 venv/
-*.pyc
+
+# Ignore cache and compiled files
 __pycache__/
-*.log
-*.sqlite3
-venv/
+*.pyc
+
+# Ignore Streamlit logs
+.streamlit/
+
+# Ignore CSV logs (optional)
+*.csv

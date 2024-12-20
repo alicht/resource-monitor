@@ -1,32 +1,44 @@
+# Standard Library Imports
+import os
+import time
+import random
+import csv
+from datetime import datetime
+import traceback
+
+# Third-Party Library Imports
 import psutil
 import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import time
-import csv
-import os
-import random
 import tensorflow as tf
+from dotenv import load_dotenv
+import openai
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Access the OpenAI API key
+api_key = os.getenv("OPENAI_API_KEY")
+
+# Ensure the API key is properly set
+if not api_key:
+    raise ValueError("API key not found. Please ensure OPENAI_API_KEY is set in your .env file.")
+
+# Set the API key for OpenAI
+openai.api_key = api_key
 
 # Function to train a simple TensorFlow model
 def tensorflow_task(task_id, epochs=5):
     st.write(f"Starting TensorFlow Task {task_id}...")
-    # Generate dummy training data
     x_train = np.random.rand(1000, 10)
     y_train = np.random.randint(2, size=(1000, 1))
-
-    # Define a simple model
     model = tf.keras.Sequential([
         tf.keras.layers.Dense(64, activation='relu'),
         tf.keras.layers.Dense(1, activation='sigmoid')
     ])
-
-    # Compile the model
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-
-    # Train the model
     model.fit(x_train, y_train, epochs=epochs, batch_size=32, verbose=0)
     st.success(f"Task {task_id} completed!")
 
@@ -45,6 +57,51 @@ def predict_resources(data, steps=5):
         return np.mean(data)  # If not enough data, use current mean
     return np.mean(data[-steps:])  # Predict using the last `steps` values
 
+# Function to track OpenAI API usage
+def track_openai_usage(prompt, model="gpt-3.5-turbo"):
+    try:
+        # OpenAI ChatCompletion request
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=100,
+        )
+
+        # Extract response text and usage details
+        response_text = response['choices'][0]['message']['content']
+        total_tokens = response['usage']['total_tokens']
+        cost = calculate_cost(total_tokens, model)
+
+        return {
+            "response_text": response_text.strip(),
+            "total_tokens": total_tokens,
+            "cost": cost,
+        }
+    except Exception as e:
+        st.error(f"An error occurred while calling the OpenAI API: {e}")
+        st.text(traceback.format_exc())
+        return None
+
+# Function to calculate cost based on token usage
+def calculate_cost(total_tokens, model):
+    if model == "gpt-3.5-turbo":
+        cost_per_1k_tokens = 0.002  # $0.002 per 1,000 tokens
+    elif model == "gpt-4":
+        cost_per_1k_tokens = 0.03  # $0.03 per 1,000 tokens
+    else:
+        cost_per_1k_tokens = 0.001  # Default pricing for other models
+    return (total_tokens / 1000) * cost_per_1k_tokens
+
+# Function to log API usage
+log_file_llm = "llm_usage_logs.csv"
+def log_llm_usage(prompt, tokens, cost):
+    with open(log_file_llm, mode="a", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow([datetime.now(), prompt, tokens, cost])
+
 # Initialize Streamlit app
 st.title("Resource Allocator with Predictive Scaling")
 st.write("This app monitors system resources, visualizes them, logs data, and runs TensorFlow tasks dynamically with predictive scaling.")
@@ -54,128 +111,40 @@ st.sidebar.header("Configuration")
 update_interval = st.sidebar.slider("Update Interval (seconds)", 1, 10, 2)
 task_count = st.sidebar.number_input("Number of Tasks", min_value=1, max_value=20, value=5)
 
-# Adjustable Thresholds
-st.sidebar.subheader("Resource Thresholds")
-cpu_threshold = st.sidebar.slider("CPU Threshold (%)", 0, 100, 70)
-memory_threshold = st.sidebar.slider("Memory Threshold (%)", 0, 100, 80)
-gpu_threshold = st.sidebar.slider("GPU Utilization Threshold (%)", 0, 100, 70)
-gpu_memory_threshold = st.sidebar.slider("GPU Memory Threshold (%)", 0, 100, 80)
+# Sidebar Input for LLM Prompts
+st.sidebar.subheader("LLM Prompt")
+prompt = st.sidebar.text_area("Enter your LLM prompt:")
+if st.sidebar.button("Send Prompt"):
+    if prompt:
+        result = track_openai_usage(prompt)
+        if result:
+            st.subheader("OpenAI API Response")
+            st.write(result["response_text"])
 
-# Initialize CSV file for logging
-log_file = "resource_logs.csv"
-if not os.path.exists(log_file):
-    with open(log_file, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["Time", "CPU Usage (%)", "Memory Usage (%)", "GPU Utilization (%)", "GPU Memory Usage (%)"])
+            st.subheader("Usage Details")
+            st.write(f"Total Tokens Used: {result['total_tokens']}")
+            st.write(f"Cost of Request: ${result['cost']:.4f}")
 
-# Session State Initialization
-if "task_queue" not in st.session_state:
-    st.session_state.task_queue = [(f"Task-{i+1}", 5) for i in range(task_count)]
-
-if "cpu_data" not in st.session_state:
-    st.session_state.cpu_data = []
-    st.session_state.memory_data = []
-    st.session_state.gpu_data = []
-    st.session_state.gpu_memory_data = []
-
-# Real-Time Resource Graphs
-st.subheader("Live Resource Usage")
-resource_placeholder = st.empty()
-chart_placeholder = st.empty()
-
-# Task Execution Button
-if st.button("Start Task Execution"):
-    for task_id, duration in st.session_state.task_queue:
-        # Gather Resource Data
-        resources = check_resources()
-        st.session_state.cpu_data.append(resources["CPU Usage (%)"])
-        st.session_state.memory_data.append(resources["Memory Usage (%)"])
-        st.session_state.gpu_data.append(resources["GPU Utilization (%)"])
-        st.session_state.gpu_memory_data.append(resources["GPU Memory Usage (%)"])
-
-        # Predict future resource usage
-        predicted_cpu = predict_resources(st.session_state.cpu_data)
-        predicted_memory = predict_resources(st.session_state.memory_data)
-        predicted_gpu = predict_resources(st.session_state.gpu_data)
-        predicted_gpu_memory = predict_resources(st.session_state.gpu_memory_data)
-
-        # Write data to CSV for historical logging
-        with open(log_file, mode="a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow([
-                time.strftime("%Y-%m-%d %H:%M:%S"),
-                resources["CPU Usage (%)"],
-                resources["Memory Usage (%)"],
-                resources["GPU Utilization (%)"],
-                resources["GPU Memory Usage (%)"]
-            ])
-
-        # Display Resources and Predictions
-        resource_placeholder.write({
-            "Current Resources": resources,
-            "Predicted Resources": {
-                "CPU": predicted_cpu,
-                "Memory": predicted_memory,
-                "GPU": predicted_gpu,
-                "GPU Memory": predicted_gpu_memory,
-            }
-        })
-
-        # Generate Live Graph
-        fig, ax = plt.subplots()
-        ax.plot(st.session_state.cpu_data, label="CPU Usage (%)")
-        ax.plot(st.session_state.memory_data, label="Memory Usage (%)")
-        ax.plot(st.session_state.gpu_data, label="GPU Utilization (%)")
-        ax.plot(st.session_state.gpu_memory_data, label="GPU Memory Usage (%)")
-        ax.legend()
-        ax.set_ylim(0, 100)
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Usage (%)")
-        ax.set_title("System Resource Usage (Real-Time)")
-
-        # Update the graph
-        chart_placeholder.pyplot(fig)
-
-        # Task Execution Check Against Predicted Thresholds
-        if (
-            predicted_cpu < cpu_threshold and
-            predicted_memory < memory_threshold and
-            predicted_gpu < gpu_threshold and
-            predicted_gpu_memory < gpu_memory_threshold
-        ):
-            tensorflow_task(task_id, duration)
+            log_llm_usage(prompt, result["total_tokens"], result["cost"])
         else:
-            st.warning(f"Task {task_id} delayed: Predicted resources exceed thresholds.")
-        
-        # Add delay based on update interval
-        time.sleep(update_interval)
+            st.error("Failed to retrieve response from OpenAI API.")
+    else:
+        st.warning("Please enter a prompt.")
 
-    st.success("All tasks completed!")
-    st.info(f"Resource usage data has been saved to `{log_file}`.")
+# Historical Logs Section for LLM API Usage
+if st.sidebar.button("View API Usage Logs"):
+    if os.path.exists(log_file_llm):
+        df_llm = pd.read_csv(log_file_llm, names=["Timestamp", "Prompt", "Tokens", "Cost"])
+        st.subheader("Logged LLM API Usage")
+        st.dataframe(df_llm)
 
-# Historical Logs Section
-st.subheader("Historical Logs")
-if st.button("View Historical Logs"):
-    if os.path.exists(log_file):
-        # Load the CSV file
-        df = pd.read_csv(log_file)
-
-        # Display Data Table
-        st.write("**Logged Resource Data:**")
-        st.dataframe(df)
-
-        # Display Trend Graphs
-        st.write("**Historical Trend Graphs:**")
+        st.subheader("LLM Usage Trends")
         fig, ax = plt.subplots()
-        ax.plot(df["Time"], df["CPU Usage (%)"], label="CPU Usage (%)")
-        ax.plot(df["Time"], df["Memory Usage (%)"], label="Memory Usage (%)")
-        ax.plot(df["Time"], df["GPU Utilization (%)"], label="GPU Utilization (%)")
-        ax.plot(df["Time"], df["GPU Memory Usage (%)"], label="GPU Memory Usage (%)")
+        ax.plot(df_llm["Tokens"], label="Tokens Used")
         ax.legend()
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Usage (%)")
-        ax.set_title("Resource Usage Over Time")
-        plt.xticks(rotation=45)
+        ax.set_xlabel("Request Index")
+        ax.set_ylabel("Tokens")
+        ax.set_title("Tokens Used Per Request")
         st.pyplot(fig)
     else:
-        st.warning("No historical logs found.")
+        st.warning("No LLM API usage logs found.")
