@@ -10,3 +10,6 @@ __pycache__/
 
 # Ignore CSV logs (optional)
 *.csv
+
+# Ignore environment variables file
+.env
